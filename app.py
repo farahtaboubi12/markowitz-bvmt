@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+from scipy.optimize import minimize
 
 st.title("Dashboard Markowitz - Banques BVMT")
 
@@ -59,26 +60,52 @@ if len(banques) >= 2:
     cov_matrix = selected_returns.cov() * 252
 
     n = len(banques)
-    weights = np.ones(n) / n
 
-    portfolio_return = np.dot(weights, mean_returns)
-    portfolio_volatility = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
-    sharpe_ratio = (portfolio_return - risk_free_rate) / portfolio_volatility
+    def portfolio_return(weights):
+        return np.dot(weights, mean_returns)
 
-    st.subheader("6. Portefeuille équipondéré")
+    def portfolio_volatility(weights):
+        return np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
 
-    st.write("Poids de chaque banque :")
+    def negative_sharpe(weights):
+        ret = portfolio_return(weights)
+        vol = portfolio_volatility(weights)
+        return -(ret - risk_free_rate) / vol
+
+    constraints = {
+        "type": "eq",
+        "fun": lambda weights: np.sum(weights) - 1
+    }
+
+    bounds = tuple((0, 1) for i in range(n))
+    initial_weights = np.ones(n) / n
+
+    result = minimize(
+        negative_sharpe,
+        initial_weights,
+        method="SLSQP",
+        bounds=bounds,
+        constraints=constraints
+    )
+
+    optimal_weights = result.x
+
+    optimal_return = portfolio_return(optimal_weights)
+    optimal_volatility = portfolio_volatility(optimal_weights)
+    optimal_sharpe = (optimal_return - risk_free_rate) / optimal_volatility
+
+    st.subheader("6. Portefeuille optimal selon le ratio de Sharpe")
 
     weights_df = pd.DataFrame({
         "Banque": banques,
-        "Poids": weights
+        "Poids optimal": optimal_weights
     })
 
     st.dataframe(weights_df)
 
-    st.write("Rentabilité du portefeuille :", round(portfolio_return * 100, 2), "%")
-    st.write("Risque du portefeuille :", round(portfolio_volatility * 100, 2), "%")
-    st.write("Ratio de Sharpe :", round(sharpe_ratio, 4))
+    st.write("Rentabilité optimale :", round(optimal_return * 100, 2), "%")
+    st.write("Risque optimal :", round(optimal_volatility * 100, 2), "%")
+    st.write("Ratio de Sharpe maximal :", round(optimal_sharpe, 4))
 
 else:
     st.warning("Choisis au moins deux banques.")
