@@ -3,109 +3,129 @@ import pandas as pd
 import numpy as np
 from scipy.optimize import minimize
 
-st.title("Dashboard Markowitz - Banques BVMT")
+st.title("📊 Dashboard Markowitz - BVMT")
 
-st.write("Analyse de portefeuille bancaire selon la théorie de Markowitz")
+st.write("Importer les fichiers Excel BVMT (2021–2025) et construire un portefeuille optimal.")
 
-# Données exemple
-data = {
-    "BIAT": [110, 112, 111, 115, 118],
-    "BT": [7, 7.2, 7.1, 7.3, 7.4],
-    "AB": [25, 26, 25.5, 26.5, 27],
-    "ATB": [3.2, 3.3, 3.25, 3.4, 3.45]
-}
-
-prices = pd.DataFrame(data)
-
-st.subheader("1. Prix historiques")
-st.dataframe(prices)
-
-returns = prices.pct_change().dropna()
-
-st.subheader("2. Rendements")
-st.dataframe(returns)
-
-mean_returns = returns.mean() * 252
-volatility = returns.std() * np.sqrt(252)
-cov_matrix = returns.cov() * 252
-
-st.subheader("3. Rentabilité et volatilité annualisées")
-
-metrics = pd.DataFrame({
-    "Rentabilité annualisée": mean_returns,
-    "Volatilité annualisée": volatility
-})
-
-st.dataframe(metrics)
-
-st.subheader("4. Matrice variance-covariance")
-st.dataframe(cov_matrix)
-
-st.subheader("5. Choix des banques")
-
-banques = st.multiselect(
-    "Choisir les banques",
-    options=prices.columns,
-    default=list(prices.columns)
+# Upload fichiers Excel
+uploaded_files = st.file_uploader(
+    "Importer les fichiers Excel (2021 à 2025)",
+    type=["xlsx"],
+    accept_multiple_files=True
 )
 
-risk_free_rate = st.number_input(
-    "Taux sans risque (%)",
-    value=7.5
-) / 100
+if uploaded_files:
+    all_data = []
 
-if len(banques) >= 2:
-    selected_returns = returns[banques]
-    mean_returns = selected_returns.mean() * 252
-    cov_matrix = selected_returns.cov() * 252
+    for file in uploaded_files:
+        df = pd.read_excel(file)
+        all_data.append(df)
 
-    n = len(banques)
+    data = pd.concat(all_data, ignore_index=True)
 
-    def portfolio_return(weights):
-        return np.dot(weights, mean_returns)
+    st.subheader("Aperçu des données")
+    st.dataframe(data.head())
 
-    def portfolio_volatility(weights):
-        return np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
+    # Choix des colonnes
+    date_col = st.selectbox("Choisir la colonne Date", data.columns)
+    name_col = st.selectbox("Choisir la colonne Banque / Société", data.columns)
+    price_col = st.selectbox("Choisir la colonne Cours de clôture", data.columns)
 
-    def negative_sharpe(weights):
-        ret = portfolio_return(weights)
-        vol = portfolio_volatility(weights)
-        return -(ret - risk_free_rate) / vol
+    # Nettoyage
+    data = data[[date_col, name_col, price_col]]
+    data.columns = ["Date", "Societe", "Close"]
 
-    constraints = {
-        "type": "eq",
-        "fun": lambda weights: np.sum(weights) - 1
-    }
+    data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
+    data["Close"] = (
+        data["Close"]
+        .astype(str)
+        .str.replace(",", ".")
+    )
+    data["Close"] = pd.to_numeric(data["Close"], errors="coerce")
 
-    bounds = tuple((0, 1) for i in range(n))
-    initial_weights = np.ones(n) / n
+    data = data.dropna()
 
-    result = minimize(
-        negative_sharpe,
-        initial_weights,
-        method="SLSQP",
-        bounds=bounds,
-        constraints=constraints
+    # Tableau des prix
+    prices = data.pivot_table(
+        index="Date",
+        columns="Societe",
+        values="Close",
+        aggfunc="last"
     )
 
-    optimal_weights = result.x
+    prices = prices.sort_index()
+    prices = prices.ffill()
 
-    optimal_return = portfolio_return(optimal_weights)
-    optimal_volatility = portfolio_volatility(optimal_weights)
-    optimal_sharpe = (optimal_return - risk_free_rate) / optimal_volatility
+    st.subheader("📈 Prix des banques")
+    st.dataframe(prices)
 
-    st.subheader("6. Portefeuille optimal selon le ratio de Sharpe")
+    # Choix des banques
+    banques = list(prices.columns)
 
-    weights_df = pd.DataFrame({
-        "Banque": banques,
-        "Poids optimal": optimal_weights
-    })
+    selected_banques = st.multiselect(
+        "Choisir les banques",
+        options=banques,
+        default=banques[:min(5, len(banques))]
+    )
 
-    st.dataframe(weights_df)
+    # Taux sans risque
+    rf = st.number_input("Taux sans risque (%)", value=7.5) / 100
 
-    st.write("Rentabilité optimale :", round(optimal_return * 100, 2), "%")
-    st.write("Risque optimal :", round(optimal_volatility * 100, 2), "%")
-    st.write("Ratio de Sharpe maximal :", round(optimal_sharpe, 4))
+    if len(selected_banques) >= 2:
+        selected_prices = prices[selected_banques]
+        returns = selected_prices.pct_change().dropna()
+
+        mean_returns = returns.mean() * 252
+        volatility = returns.std() * np.sqrt(252)
+        cov_matrix = returns.cov() * 252
+
+        st.subheader("📊 Indicateurs")
+        st.dataframe(pd.DataFrame({
+            "Rentabilité": mean_returns,
+            "Volatilité": volatility
+        }))
+
+        st.subheader("📊 Matrice variance-covariance")
+        st.dataframe(cov_matrix)
+
+        # Markowitz
+        n = len(selected_banques)
+
+        def port_return(w):
+            return np.dot(w, mean_returns)
+
+        def port_vol(w):
+            return np.sqrt(np.dot(w.T, np.dot(cov_matrix, w)))
+
+        def neg_sharpe(w):
+            return -(port_return(w) - rf) / port_vol(w)
+
+        constraints = {"type": "eq", "fun": lambda w: np.sum(w) - 1}
+        bounds = tuple((0, 1) for _ in range(n))
+        init = np.ones(n) / n
+
+        result = minimize(neg_sharpe, init, method="SLSQP",
+                          bounds=bounds, constraints=constraints)
+
+        weights = result.x
+
+        ret = port_return(weights)
+        vol = port_vol(weights)
+        sharpe = (ret - rf) / vol
+
+        st.subheader("🚀 Portefeuille optimal (Sharpe max)")
+
+        st.dataframe(pd.DataFrame({
+            "Banque": selected_banques,
+            "Poids": weights
+        }))
+
+        st.write("📈 Rentabilité :", round(ret * 100, 2), "%")
+        st.write("⚠️ Risque :", round(vol * 100, 2), "%")
+        st.write("⭐ Sharpe :", round(sharpe, 4))
+
+    else:
+        st.warning("Choisir au moins 2 banques")
 
 else:
-    st.warning("Choisis au moins deux banques.")
+    st.info("Importer les fichiers Excel pour commencer")
